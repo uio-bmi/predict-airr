@@ -1,0 +1,5 @@
+# replace these with your own dependencies and versions
+pytest~=8.4.2
+pandas~=2.3.2
+numpy~=2.3.2
+tqdm~=4.67.1
