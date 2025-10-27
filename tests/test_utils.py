@@ -115,3 +115,19 @@ def test_out_dir_no_write_permission():
                 validate_dirs_and_files(train_dir, [test_dir], out_dir)
         finally:
             os.chmod(no_write_dir, 0o700)  # Restore permissions for cleanup
+
+
+def test_validate_dirs_and_files_multiple_test_dirs():
+    """
+    Ensure validate_dirs_and_files accepts multiple test directories in the list.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        train_dir = os.path.join(tmp, "train")
+        test_dir1 = os.path.join(tmp, "test1")
+        test_dir2 = os.path.join(tmp, "test2")
+        out_dir = os.path.join(tmp, "out_multi")
+        create_dir_with_tsv_and_metadata(train_dir)
+        create_dir_with_tsv(test_dir1)
+        create_dir_with_tsv(test_dir2)
+        validate_dirs_and_files(train_dir, [test_dir1, test_dir2], out_dir)
+        assert os.path.isdir(out_dir)
