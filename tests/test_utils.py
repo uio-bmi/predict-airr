@@ -2,7 +2,7 @@ import os
 import tempfile
 import pytest
 import pandas as pd
-from submission.utils import validate_dirs_and_files, concatenate_output_files
+from submission.utils import validate_dirs_and_files, concatenate_output_files, load_and_encode_kmers, get_dataset_pairs
 
 
 def create_dir_with_tsv_and_metadata(dir_path, n_tsv=1):
@@ -192,3 +192,190 @@ def test_concatenate_output_files_empty_dir():
         expected_cols = ['ID', 'dataset', 'label_positive_probability', 'junction_aa', 'v_call', 'j_call']
         assert list(result_df.columns) == expected_cols
 
+
+def test_load_and_encode_kmers_with_metadata():
+    """
+    Test load_and_encode_kmers with metadata.csv present.
+    Verifies k-mer encoding with simple sequences for manual validation.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = os.path.join(tmp, "data")
+        os.makedirs(data_dir, exist_ok=True)
+
+        rep1_df = pd.DataFrame({
+            'junction_aa': ['AAA', 'AAB'],
+            'v_call': ['TRBV1', 'TRBV2'],
+            'j_call': ['TRBJ1', 'TRBJ2']
+        })
+        rep1_df.to_csv(os.path.join(data_dir, 'rep1.tsv'), sep='\t', index=False)
+
+        rep2_df = pd.DataFrame({
+            'junction_aa': ['ABCD', 'ABCE'],
+            'v_call': ['TRBV3', 'TRBV4'],
+            'j_call': ['TRBJ3', 'TRBJ4']
+        })
+        rep2_df.to_csv(os.path.join(data_dir, 'rep2.tsv'), sep='\t', index=False)
+
+        metadata_df = pd.DataFrame({
+            'repertoire_id': ['rep1', 'rep2'],
+            'filename': ['rep1.tsv', 'rep2.tsv'],
+            'label_positive': [True, False]
+        })
+        metadata_df.to_csv(os.path.join(data_dir, 'metadata.csv'), index=False)
+
+        features_df, metadata_result = load_and_encode_kmers(data_dir, k=3)
+
+        assert len(metadata_result) == 2
+        assert set(metadata_result.columns) == {'ID', 'label_positive'}
+        assert metadata_result['ID'].tolist() == ['rep1', 'rep2']
+        assert metadata_result['label_positive'].tolist() == [True, False]
+
+        assert len(features_df) == 2
+        assert features_df.index.name == 'ID'
+        assert 'rep1' in features_df.index
+        assert 'rep2' in features_df.index
+
+        rep1_row = features_df.loc['rep1']
+        assert rep1_row.get('AAA', 0) == 1
+        assert rep1_row.get('AAB', 0) == 1
+
+        rep2_row = features_df.loc['rep2']
+        assert rep2_row.get('ABC', 0) == 2
+        assert rep2_row.get('BCD', 0) == 1
+        assert rep2_row.get('BCE', 0) == 1
+
+
+def test_load_and_encode_kmers_without_metadata():
+    """
+    Test load_and_encode_kmers without metadata.csv.
+    Verifies that function works when only TSV files are present.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = os.path.join(tmp, "data")
+        os.makedirs(data_dir, exist_ok=True)
+
+        rep1_df = pd.DataFrame({
+            'junction_aa': ['CCC', 'CCD'],
+            'v_call': ['TRBV1', 'TRBV2'],
+            'j_call': ['TRBJ1', 'TRBJ2']
+        })
+        rep1_df.to_csv(os.path.join(data_dir, 'sample1.tsv'), sep='\t', index=False)
+
+        rep2_df = pd.DataFrame({
+            'junction_aa': ['DDEE'],
+            'v_call': ['TRBV3'],
+            'j_call': ['TRBJ3']
+        })
+        rep2_df.to_csv(os.path.join(data_dir, 'sample2.tsv'), sep='\t', index=False)
+
+        features_df, metadata_result = load_and_encode_kmers(data_dir, k=2)
+
+        assert len(metadata_result) == 2
+        assert 'ID' in metadata_result.columns
+        assert 'label_positive' not in metadata_result.columns
+        assert set(metadata_result['ID'].tolist()) == {'sample1', 'sample2'}
+
+        assert features_df.index.name == 'ID'
+        assert 'sample1' in features_df.index
+        assert 'sample2' in features_df.index
+
+        sample1_row = features_df.loc['sample1']
+        assert sample1_row.get('CC', 0) == 3
+        assert sample1_row.get('CD', 0) == 1
+
+        sample2_row = features_df.loc['sample2']
+        assert sample2_row.get('DD', 0) == 1
+        assert sample2_row.get('DE', 0) == 1
+        assert sample2_row.get('EE', 0) == 1
+
+
+def test_load_and_encode_kmers_empty_sequences():
+    """
+    Test load_and_encode_kmers handles NaN/empty sequences gracefully.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = os.path.join(tmp, "data")
+        os.makedirs(data_dir, exist_ok=True)
+
+        rep_df = pd.DataFrame({
+            'junction_aa': ['ABC', None, 'DEF', pd.NA],
+            'v_call': ['TRBV1', 'TRBV2', 'TRBV3', 'TRBV4'],
+            'j_call': ['TRBJ1', 'TRBJ2', 'TRBJ3', 'TRBJ4']
+        })
+        rep_df.to_csv(os.path.join(data_dir, 'rep1.tsv'), sep='\t', index=False)
+
+        metadata_df = pd.DataFrame({
+            'repertoire_id': ['rep1'],
+            'filename': ['rep1.tsv'],
+            'label_positive': [True]
+        })
+        metadata_df.to_csv(os.path.join(data_dir, 'metadata.csv'), index=False)
+
+        features_df, metadata_result = load_and_encode_kmers(data_dir, k=2)
+
+        assert features_df.index.name == 'ID'
+        assert 'rep1' in features_df.index
+
+        rep1_row = features_df.loc['rep1']
+        assert rep1_row.get('AB', 0) == 1
+        assert rep1_row.get('BC', 0) == 1
+        assert rep1_row.get('DE', 0) == 1
+        assert rep1_row.get('EF', 0) == 1
+
+
+def test_get_dataset_pairs_basic():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        train_dir = os.path.join(tmpdir, "train")
+        test_dir = os.path.join(tmpdir, "test")
+        os.makedirs(train_dir)
+        os.makedirs(test_dir)
+
+        # Create train datasets
+        os.makedirs(os.path.join(train_dir, "train_dataset_1"))
+        os.makedirs(os.path.join(train_dir, "train_dataset_2"))
+
+        # Create test datasets (multiple for dataset 1)
+        os.makedirs(os.path.join(test_dir, "test_dataset_1"))
+        os.makedirs(os.path.join(test_dir, "test_dataset_1_1"))
+        os.makedirs(os.path.join(test_dir, "test_dataset_2"))
+
+        pairs = get_dataset_pairs(train_dir, test_dir)
+
+        assert len(pairs) == 2
+        assert pairs[0][0].endswith("train_dataset_1")
+        assert len(pairs[0][1]) == 2
+        assert pairs[1][0].endswith("train_dataset_2")
+        assert len(pairs[1][1]) == 1
+
+
+def test_get_dataset_pairs_multi_digit():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        train_dir = os.path.join(tmpdir, "train")
+        test_dir = os.path.join(tmpdir, "test")
+        os.makedirs(train_dir)
+        os.makedirs(test_dir)
+
+        os.makedirs(os.path.join(train_dir, "train_dataset_10"))
+        os.makedirs(os.path.join(test_dir, "test_dataset_10"))
+        os.makedirs(os.path.join(test_dir, "test_dataset_10_1"))
+
+        pairs = get_dataset_pairs(train_dir, test_dir)
+
+        assert len(pairs) == 1
+        assert pairs[0][0].endswith("train_dataset_10")
+        assert len(pairs[0][1]) == 2
+
+
+def test_get_dataset_pairs_no_matching_tests():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        train_dir = os.path.join(tmpdir, "train")
+        test_dir = os.path.join(tmpdir, "test")
+        os.makedirs(train_dir)
+        os.makedirs(test_dir)
+
+        os.makedirs(os.path.join(train_dir, "train_dataset_1"))
+
+        pairs = get_dataset_pairs(train_dir, test_dir)
+
+        assert len(pairs) == 1
+        assert len(pairs[0][1]) == 0

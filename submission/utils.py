@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import glob
 import sys
+from collections import defaultdict
 from typing import Iterator, Tuple, Union, List
 
 
@@ -90,6 +91,61 @@ def load_full_dataset(data_dir: str) -> pd.DataFrame:
 
     full_dataset_df = pd.concat(df_list, ignore_index=True)
     return full_dataset_df
+
+
+def load_and_encode_kmers(data_dir: str, k: int = 3) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Loading and k-mer encoding of repertoire data.
+
+    Args:
+        data_dir: Path to data directory
+        k: K-mer length
+
+    Returns:
+        Tuple of (encoded_features_df, metadata_df)
+        metadata_df always contains 'ID', and 'label_positive' if available
+    """
+    from collections import Counter
+
+    metadata_path = os.path.join(data_dir, 'metadata.csv')
+    data_loader = load_data_generator(data_dir=data_dir)
+
+    repertoire_features = []
+    metadata_records = []
+
+    search_pattern = os.path.join(data_dir, '*.tsv')
+    total_files = len(glob.glob(search_pattern))
+
+    for item in tqdm(data_loader, total=total_files, desc=f"Encoding {k}-mers"):
+        if os.path.exists(metadata_path):
+            rep_id, data_df, label = item
+        else:
+            filename, data_df = item
+            rep_id = os.path.basename(filename).replace(".tsv", "")
+            label = None
+
+        kmer_counts = Counter()
+        for seq in data_df['junction_aa'].dropna():
+            for i in range(len(seq) - k + 1):
+                kmer_counts[seq[i:i + k]] += 1
+
+        repertoire_features.append({
+            'ID': rep_id,
+            **kmer_counts
+        })
+
+        metadata_record = {'ID': rep_id}
+        if label is not None:
+            metadata_record['label_positive'] = label
+        metadata_records.append(metadata_record)
+
+        del data_df, kmer_counts
+
+    features_df = pd.DataFrame(repertoire_features).fillna(0).set_index('ID')
+    features_df.fillna(0)
+    metadata_df = pd.DataFrame(metadata_records)
+
+    return features_df, metadata_df
 
 
 def save_tsv(df: pd.DataFrame, path: str):
@@ -216,3 +272,21 @@ def concatenate_output_files(out_dir: str) -> None:
     submissions_file = os.path.join(out_dir, 'submissions.csv')
     concatenated_df.to_csv(submissions_file, index=False)
     print(f"Concatenated output written to `{submissions_file}`.")
+
+
+def get_dataset_pairs(train_dir: str, test_dir: str) -> List[Tuple[str, List[str]]]:
+    """Returns list of (train_path, [test_paths]) tuples for dataset pairs."""
+    test_groups = defaultdict(list)
+    for test_name in sorted(os.listdir(test_dir)):
+        if test_name.startswith("test_dataset_"):
+            base_id = test_name.replace("test_dataset_", "").split("_")[0]
+            test_groups[base_id].append(os.path.join(test_dir, test_name))
+
+    pairs = []
+    for train_name in sorted(os.listdir(train_dir)):
+        if train_name.startswith("train_dataset_"):
+            train_id = train_name.replace("train_dataset_", "")
+            train_path = os.path.join(train_dir, train_name)
+            pairs.append((train_path, test_groups.get(train_id, [])))
+
+    return pairs
